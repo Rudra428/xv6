@@ -1,0 +1,106 @@
+qemu-system-riscv64 -machine virt -bios none -kernel kernel/kernel -m 128M -smp 3 -nographic -global virtio-mmio.force-legacy=false -drive file=fs.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+
+xv6 kernel is booting
+
+hart 2 starting
+hart 1 starting
+init: starting sh
+$ syncdeadlock
+Resource capacities: printer=2, scanner=1, disk=2
+Deadlock prevention: acquire resources in printer < scanner < disk order
+[pid 4] cycle 1 requests printer
+[pid 4] cycle 1 granted printer
+[pid 4] cycle 1 requests scanner
+[pid 4] cycle 1 granted scanner
+[pid 4] cycle 1 starts work
+[pid 5] cycle 1 requests printer
+[pid 5] cycle 1 granted printer
+[pid 5] cycle 1 requests disk
+[pid 5] cycle 1 granted disk
+[pid 5] cycle 1 starts work
+[pid 6] cycle 1 requests scanner
+[pid 7] cycle 1 requests printer
+[pid 8] cycle 1 requests printer
+[pid 4] cycle 1 releases resources
+[pid 4] cycle 2 requests printer
+[pid 6] cycle 1 granted scanner
+[pid 6] cycle 1 requests disk
+[pid 6] cycle 1 granted disk
+[pid 6] cycle 1 starts work
+[pid 7] cycle 1 granted printer
+[pid 7] cycle 1 requests scanner
+[pid 5] cycle 1 releases resources
+[pid 5] cycle 2 requests printer
+[pid 4] cycle 2 granted printer
+[pid 4] cycle 2 requests scanner
+[pid 6] cycle 1 releases resources
+[pid 6] cycle 2 requests scanner
+[pid 4] cycle 2 granted scanner
+[pid 4] cycle 2 starts work
+[pid 4] cycle 2 releases resources
+[pid 4] cycle 3 requests printer
+[pid 5] cycle 2 granted printer
+[pid 5] cycle 2 requests disk
+[pid 5] cycle 2 granted disk
+[pid 5] cycle 2 starts work
+[pid 6] cycle 2 granted scanner
+[pid 6] cycle 2 requests disk
+[pid 6] cycle 2 granted disk
+[pid 6] cycle 2 starts work
+[pid 5] cycle 2 releases resources
+[pid 5] cycle 3 requests printer
+[pid 6] cycle 2 releases resources
+[pid 6] cycle 3 requests scanner
+[pid 7] cycle 1 granted scanner
+[pid 7] cycle 1 starts work
+[pid 4] cycle 3 granted printer
+[pid 4] cycle 3 requests scanner
+[pid 7] cycle 1 releases resources
+[pid 7] cycle 2 requests printer
+[pid 8] cycle 1 granted printer
+[pid 8] cycle 1 requests disk
+[pid 8] cycle 1 granted disk
+[pid 8] cycle 1 starts work
+[pid 4] cycle 3 granted scanner
+[pid 4] cycle 3 starts work
+[pid 4] cycle 3 releases resources
+[pid 4] completed all cycles
+[pid 5] cycle 3 granted printer
+[pid 5] cycle 3 requests disk
+[pid 5] cycle 3 granted disk
+[pid 5] cycle 3 starts work
+[pid 6] cycle 3 granted scanner
+[pid 8] cycle 1 releases resources
+[pid 8] cycle 2 requests printer
+[pid 6] cycle 3 requests disk
+[pid 6] cycle 3 granted disk
+[pid 6] cycle 3 starts work
+[pid 7] cycle 2 granted printer
+[pid 7] cycle 2 requests scanner
+[pid 5] cycle 3 releases resources
+[pid 5] completed all cycles
+[pid 8] cycle 2 granted printer
+[pid 8] cycle 2 requests disk
+[pid 8] cycle 2 granted disk
+[pid 8] cycle 2 starts work
+[pid 6] cycle 3 releases resources
+[pid 6] completed all cycles
+[pid 7] cycle 2 granted scanner
+[pid 7] cycle 2 starts work
+[pid 8] cycle 2 releases resources
+[pid 8] cycle 3 requests printer
+[pid 8] cycle 3 granted printer
+[pid 8] cycle 3 requests disk
+[pid 8] cycle 3 granted disk
+[pid 8] cycle 3 starts work
+[pid 7] cycle 2 releases resources
+[pid 7] cycle 3 requests printer
+[pid 7] cycle 3 granted printer
+[pid 7] cycle 3 requests scanner
+[pid 7] cycle 3 granted scanner
+[pid 7] cycle 3 starts work
+[pid 8] cycle 3 releases resources
+[pid 8] completed all cycles
+[pid 7] cycle 3 releases resources
+[pid 7] completed all cycles
+All 5 processes completed 3 cycles; no deadlock occurred.
