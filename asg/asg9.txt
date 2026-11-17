@@ -1,0 +1,144 @@
+=========================================================
+ASSIGNMENT 9: PAGE TABLES & REPLACEMENT (x86)
+=========================================================
+
+---------------------------------------------------------
+QUESTION 1: PRINTING THE PAGE TABLE (vmprint)
+---------------------------------------------------------
+1. Add `vmprint` system call (headers/usys.S as usual).
+2. `kernel/vm.c`: Implement `sys_vmprint`
+```c
+int sys_vmprint(void) {
+  struct proc *p = myproc();
+  pde_t *pgdir = p->pgdir;
+  int user_pages = 0;
+  int pt_pages = 0;
+  
+  cprintf("Page Table Dump:\n");
+  for(int i = 0; i < 512; i++) {
+    if(pgdir[i] & PTE_P) {
+      if(i >= PDX(KERNBASE)) continue; // Ignore kernel space
+      pt_pages++;
+      pte_t *pt = (pte_t*)P2V(PTE_ADDR(pgdir[i]));
+      
+      for(int j = 0; j < 512; j++) {
+        if(pt[j] & PTE_P) {
+          user_pages++;
+          uint va = (i << 22) | (j << 12);
+          cprintf("VA: 0x%x -> PA: 0x%x, Flags: P=%d W=%d U=%d\n",
+                  va, PTE_ADDR(pt[j]), 
+                  (pt[j]&PTE_P)?1:0, (pt[j]&PTE_W)?1:0, (pt[j]&PTE_U)?1:0);
+        }
+      }
+    }
+  }
+  cprintf("Total Valid User Pages: %d\n", user_pages);
+  cprintf("Total PT Pages used: %d\n", pt_pages);
+  return 0;
+}
+```
+
+---------------------------------------------------------
+QUESTION 2: HANDLING PAGE FAULTS (Lazy Allocation)
+---------------------------------------------------------
+(This is almost identical to Assignment 8 Question 4, but with a page fault tracker).
+1. `kernel/proc.h`: Add `int page_faults;` to `struct proc`.
+2. `kernel/proc.c`: In `allocproc`, set `p->page_faults = 0;`.
+3. Syscalls: Add `int sys_getfaults(void) { return myproc()->page_faults; }`.
+4. `kernel/sysproc.c`: Modify `sys_sbrk` to only increment `sz`. (See Assignment 8 Q4).
+5. `kernel/trap.c`: Handle `T_PGFLT` (14).
+```c
+  case T_PGFLT: {
+    uint fault_addr = rcr2();
+    struct proc *p = myproc();
+    
+    if(fault_addr < p->sz) {
+      char *mem = kalloc();
+      if(!mem) { p->killed = 1; break; }
+      memset(mem, 0, PGSIZE);
+      uint a = PGROUNDDOWN(fault_addr);
+      if(mappages(p->pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0) {
+        kfree(mem); p->killed = 1;
+      } else {
+        p->page_faults++; // Track the handled fault!
+      }
+    } else {
+      cprintf("PID %d: Access out of bounds at 0x%x\n", p->pid, fault_addr);
+      p->killed = 1;
+    }
+    break;
+  }
+```
+
+---------------------------------------------------------
+QUESTION 3: PAGE REPLACEMENT ALGORITHMS
+---------------------------------------------------------
+This is a purely user-space C program (`user/pagerepl.c`):
+```c
+#include "types.h"
+#include "user.h"
+
+void simulate(int *ref, int ref_len, int frames, int is_lru) {
+    int mem[10]; // Max frames for simulation
+    int time[10];
+    int faults = 0;
+    
+    for(int i=0; i<frames; i++) mem[i] = -1;
+
+    for(int i=0; i<ref_len; i++) {
+        int page = ref[i];
+        int hit = 0;
+        
+        for(int j=0; j<frames; j++) {
+            if(mem[j] == page) {
+                hit = 1;
+                if(is_lru) time[j] = i; // Update usage time for LRU
+                break;
+            }
+        }
+        
+        if(!hit) {
+            faults++;
+            int replace_idx = -1;
+            // Find empty slot
+            for(int j=0; j<frames; j++) {
+                if(mem[j] == -1) { replace_idx = j; break; }
+            }
+            // If full, apply algorithm
+            if(replace_idx == -1) {
+                int min_time = i + 1;
+                for(int j=0; j<frames; j++) {
+                    if(time[j] < min_time) {
+                        min_time = time[j];
+                        replace_idx = j;
+                    }
+                }
+            }
+            mem[replace_idx] = page;
+            time[replace_idx] = i; // For FIFO, this is arrival time. For LRU, last used.
+        }
+        
+        printf(1, "%d -> [", page);
+        for(int j=0; j<frames; j++) {
+            if(mem[j] != -1) printf(1, "%d ", mem[j]);
+            else printf(1, "- ");
+        }
+        printf(1, "] %s\n", hit ? "HIT" : "FAULT");
+    }
+    printf(1, "\nTotal Faults (%s): %d\n", is_lru ? "LRU" : "FIFO", faults);
+    printf(1, "Hit Ratio: %d / %d\n\n", ref_len - faults, ref_len);
+}
+
+int main() {
+    int ref[] = {7,0,1,2,0,3,0,4,2,3,0,3,2,1,2,0,1,7,0,1};
+    int len = sizeof(ref)/sizeof(ref[0]);
+    
+    printf(1, "--- 3 FRAMES FIFO ---\n");
+    simulate(ref, len, 3, 0);
+    
+    printf(1, "--- 3 FRAMES LRU ---\n");
+    simulate(ref, len, 3, 1);
+    
+    exit();
+}
+```

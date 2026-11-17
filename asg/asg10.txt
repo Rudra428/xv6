@@ -1,0 +1,150 @@
+=========================================================
+ASSIGNMENT 10: MEMORY TRACKING & PAGING (x86)
+=========================================================
+
+---------------------------------------------------------
+QUESTION 1: MEMORY MANAGEMENT (memstats)
+---------------------------------------------------------
+1. `kernel/kalloc.c`: Track allocations.
+```c
+uint total_alloc_pages = 0;
+uint total_freed_pages = 0;
+uint avail_pages = 0; 
+
+void kfree(char *v) {
+  // ...
+  if(kmem.use_lock) acquire(&kmem.lock);
+  r->next = kmem.freelist;
+  kmem.freelist = r;
+  total_freed_pages++;
+  avail_pages++;
+  if(kmem.use_lock) release(&kmem.lock);
+}
+
+char* kalloc(void) {
+  // ...
+  if(r) {
+    kmem.freelist = r->next;
+    total_alloc_pages++;
+    avail_pages--;
+  }
+  // ...
+}
+```
+2. `kernel/sysproc.c`: Add `sys_memstats`
+```c
+extern uint total_alloc_pages;
+extern uint total_freed_pages;
+extern uint avail_pages;
+
+int sys_memstats(void) {
+  cprintf("Total Allocated Pages: %d\n", total_alloc_pages);
+  cprintf("Total Freed Pages: %d\n", total_freed_pages);
+  cprintf("Currently Allocated Pages: %d\n", total_alloc_pages - total_freed_pages);
+  cprintf("Available Physical Pages: %d\n", avail_pages);
+  return 0;
+}
+```
+
+---------------------------------------------------------
+QUESTION 2: VIRTUAL TO PHYSICAL (vtop)
+---------------------------------------------------------
+This is identical to `va2pa` in Assignment 8.
+1. `kernel/vm.c`:
+```c
+int sys_vtop(void) {
+  int va;
+  if(argint(0, &va) < 0) return -1;
+  struct proc *p = myproc();
+  pte_t *pte = walkpgdir(p->pgdir, (void*)va, 0);
+  if(!pte || !(*pte & PTE_P)) return -1;
+  return PTE_ADDR(*pte) | (va & 0xFFF);
+}
+```
+
+---------------------------------------------------------
+QUESTION 3: PAGE PROTECTION (pageinfo & setreadonly)
+---------------------------------------------------------
+1. `kernel/vm.c`: Implement `sys_pageinfo` and `sys_setreadonly`
+```c
+int sys_pageinfo(void) {
+  int va;
+  if(argint(0, &va) < 0) return -1;
+  
+  pte_t *pte = walkpgdir(myproc()->pgdir, (void*)va, 0);
+  if(!pte || !(*pte & PTE_P)) {
+    cprintf("Address 0x%x is not mapped.\n", va);
+    return -1;
+  }
+  
+  cprintf("Frame PA: 0x%x, Flags: P=%d W=%d U=%d\n", 
+          PTE_ADDR(*pte), (*pte & PTE_P)?1:0, (*pte & PTE_W)?1:0, (*pte & PTE_U)?1:0);
+  return 0;
+}
+
+int sys_setreadonly(void) {
+  int va;
+  if(argint(0, &va) < 0) return -1;
+  
+  pte_t *pte = walkpgdir(myproc()->pgdir, (void*)va, 0);
+  if(!pte || !(*pte & PTE_P)) return -1;
+  
+  *pte &= ~PTE_W; // Clear write permission bit
+  
+  // Flush TLB so the processor sees the updated page table
+  lcr3(V2P(myproc()->pgdir));
+  return 0;
+}
+```
+
+2. `user/pagetest.c`:
+```c
+#include "types.h"
+#include "user.h"
+
+int main() {
+    char *ptr = malloc(4096);
+    ptr[0] = 'A'; // Write to it so it is allocated
+    
+    printf(1, "Before protection:\n");
+    pageinfo((int)ptr);
+    
+    setreadonly((int)ptr);
+    printf(1, "\nAfter protection:\n");
+    pageinfo((int)ptr);
+    
+    printf(1, "\nAttempting to write to read-only page... (should cause trap)\n");
+    ptr[1] = 'B'; // This will cause a Page Fault!
+    
+    exit();
+}
+```
+
+---------------------------------------------------------
+QUESTION 4: PAGE REPLACEMENT (Optimal Simulator)
+---------------------------------------------------------
+(Similar to Q3 of Assignment 9, but requires Optimal implementation).
+`user/pagereplace.c`:
+```c
+#include "types.h"
+#include "user.h"
+
+// Helper for Optimal to find farthest future use
+int get_farthest(int *mem, int frames, int *ref, int ref_len, int current_idx) {
+    int farthest_idx = -1;
+    int max_dist = -1;
+    
+    for(int i=0; i<frames; i++) {
+        int dist = 9999;
+        for(int j=current_idx+1; j<ref_len; j++) {
+            if(mem[i] == ref[j]) { dist = j; break; }
+        }
+        if(dist > max_dist) { max_dist = dist; farthest_idx = i; }
+    }
+    return farthest_idx;
+}
+
+// Merge this with the simulator logic provided in Assignment 9 Question 3.
+// When an eviction is needed for OPTIMAL:
+// replace_idx = get_farthest(mem, frames, ref, ref_len, i);
+```

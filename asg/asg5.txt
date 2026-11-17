@@ -1,0 +1,163 @@
+=========================================================
+ASSIGNMENT 5: PROCESS SYNCHRONIZATION (xv6-riscv)
+=========================================================
+
+---------------------------------------------------------
+PREREQUISITE: KERNEL SEMAPHORES
+---------------------------------------------------------
+Add Syscalls: `sem_init`, `sem_wait`, `sem_post`. (Headers/syscall config same as before).
+kernel/sysproc.c:
+#include "spinlock.h"
+struct { struct spinlock lock; int val; } sems[20];
+
+uint64 sys_sem_init(void) {
+  int id, v; if(argint(0,&id)<0||argint(1,&v)<0) return -1;
+  initlock(&sems[id].lock, "sem"); sems[id].val = v; return 0;
+}
+uint64 sys_sem_wait(void) {
+  int id; if(argint(0,&id)<0) return -1;
+  acquire(&sems[id].lock);
+  while(sems[id].val <= 0) sleep(&sems[id], &sems[id].lock);
+  sems[id].val--; release(&sems[id].lock); return 0;
+}
+uint64 sys_sem_post(void) {
+  int id; if(argint(0,&id)<0) return -1;
+  acquire(&sems[id].lock);
+  sems[id].val++; wakeup(&sems[id]);
+  release(&sems[id].lock); return 0;
+}
+
+---------------------------------------------------------
+QUESTION 1: PETERSON'S ALGORITHM
+---------------------------------------------------------
+To truly share memory without complex `uvmcopy` edits, we will add a syscall to allocate a shared page, and slightly modify `fork`.
+1. kernel/proc.h: Add `uint64 shm_va;` to `struct proc`. (Initialize to 0 in allocproc).
+2. kernel/sysproc.c:
+uint64 sys_shm_get(void) {
+  struct proc *p = myproc();
+  if(p->shm_va != 0) return p->shm_va;
+  void *pa = kalloc(); memset(pa, 0, PGSIZE);
+  p->shm_va = TRAPFRAME - (2 * PGSIZE); // Pick a high address
+  mappages(p->pagetable, p->shm_va, PGSIZE, (uint64)pa, PTE_W|PTE_R|PTE_U);
+  return p->shm_va;
+}
+3. kernel/proc.c (in `fork()` before returning pid):
+  if(p->shm_va != 0) { // Map parent's physical page to child
+    uint64 pa = walkaddr(p->pagetable, p->shm_va);
+    mappages(np->pagetable, p->shm_va, PGSIZE, pa, PTE_W|PTE_R|PTE_U);
+    np->shm_va = p->shm_va;
+  }
+4. user/peterson.c:
+#include "kernel/types.h"
+#include "user/user.h"
+struct shm_data { int flag[2]; int turn; int counter; };
+int main() {
+    struct shm_data *shm = (struct shm_data*)shm_get();
+    shm->flag[0] = 0; shm->flag[1] = 0; shm->counter = 0;
+    
+    int id = fork() == 0 ? 1 : 0;
+    for(int i=0; i<10; i++) {
+        shm->flag[id] = 1;
+        shm->turn = 1 - id;
+        while(shm->flag[1-id] == 1 && shm->turn == 1-id); // Busy wait
+        
+        // Critical Section
+        shm->counter++;
+        printf("Process %d in CS, counter = %d\n", id, shm->counter);
+        
+        shm->flag[id] = 0; // Exit section
+        sleep(5);
+    }
+    if(id == 0) { wait(0); printf("Final Counter: %d\n", shm->counter); }
+    exit(0);
+}
+
+---------------------------------------------------------
+QUESTION 2: PRODUCER-CONSUMER
+---------------------------------------------------------
+user/prodcons.c
+#include "kernel/types.h"
+#include "user/user.h"
+int main() {
+    int p[2]; pipe(p); // Simulate shared buffer
+    sem_init(0, 5); sem_init(1, 0); sem_init(2, 1); // empty, full, mutex
+    if(fork() == 0) {
+        for(int i=0; i<20; i++) {
+            sem_wait(1); sem_wait(2);
+            int val; read(p[0], &val, 4);
+            printf("Consumer read: %d\n", val);
+            sem_post(2); sem_post(0); sleep(2);
+        } exit(0);
+    } else {
+        for(int i=1; i<=20; i++) {
+            sem_wait(0); sem_wait(2);
+            write(p[1], &i, 4);
+            printf("Producer wrote: %d\n", i);
+            sem_post(2); sem_post(1); sleep(1);
+        } wait(0); exit(0);
+    }
+}
+
+---------------------------------------------------------
+QUESTION 3: READERS-WRITERS
+---------------------------------------------------------
+user/readwrite.c
+#include "kernel/types.h"
+#include "user/user.h"
+int main() {
+    int *rc = (int*)shm_get(); // Use shm_get from Q1
+    *rc = 0;
+    sem_init(0, 1); // mutex for rc
+    sem_init(1, 1); // wrt for data
+    
+    for(int i=0; i<3; i++) { // Readers
+        if(fork() == 0) {
+            for(int j=0; j<3; j++) {
+                sem_wait(0);
+                (*rc)++; if(*rc == 1) sem_wait(1);
+                sem_post(0);
+                printf("Reader %d reading\n", getpid()); sleep(5);
+                sem_wait(0);
+                (*rc)--; if(*rc == 0) sem_post(1);
+                sem_post(0); sleep(5);
+            } exit(0);
+        }
+    }
+    for(int i=0; i<2; i++) { // Writers
+        if(fork() == 0) {
+            for(int j=0; j<3; j++) {
+                sem_wait(1);
+                printf("Writer %d writing\n", getpid()); sleep(10);
+                sem_post(1); sleep(10);
+            } exit(0);
+        }
+    }
+    for(int i=0; i<5; i++) wait(0);
+    exit(0);
+}
+
+---------------------------------------------------------
+QUESTION 4: DINING PHILOSOPHERS
+---------------------------------------------------------
+user/dining.c
+#include "kernel/types.h"
+#include "user/user.h"
+int main() {
+    for(int i=0; i<5; i++) sem_init(i, 1); // 5 forks
+    for(int i=0; i<5; i++) {
+        if(fork() == 0) {
+            int left = i, right = (i+1)%5;
+            int first = (left < right) ? left : right; // Resource ordering
+            int second = (left < right) ? right : left;
+            for(int j=0; j<5; j++) {
+                printf("Phil %d: THINKING\n", i); sleep(2);
+                printf("Phil %d: HUNGRY\n", i);
+                sem_wait(first); sem_wait(second);
+                printf("Phil %d: EATING\n", i); sleep(2);
+                sem_post(second); sem_post(first);
+            } exit(0);
+        }
+    }
+    for(int i=0; i<5; i++) wait(0);
+    exit(0);
+}

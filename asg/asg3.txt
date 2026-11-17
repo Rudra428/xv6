@@ -1,0 +1,204 @@
+=========================================================
+ASSIGNMENT 3: SCHEDULING ALGORITHMS (xv6-riscv)
+=========================================================
+Note: Since xv6 can only run one scheduler at a time, you will need to replace the loop inside `scheduler()` in `kernel/proc.c` for each question to test them individually.
+
+---------------------------------------------------------
+COMMON SETUP: Update struct proc and add Syscalls
+---------------------------------------------------------
+1. In `kernel/proc.h`, add to `struct proc`:
+   uint ctime;         // For FCFS & HRRN
+   int priority;       // For Priority Scheduler
+   uint wait_ticks;    // For Aging
+   int burst_time;     // For SJF
+
+2. In `kernel/proc.c`, inside `allocproc()`:
+   p->ctime = ticks;
+   p->priority = 10;
+   p->wait_ticks = 0;
+   p->burst_time = 0;
+
+3. Add Syscalls (`set_priority` & `set_burst`):
+   - `user/user.h`: 
+     int set_priority(int, int);
+     int set_burst(int, int);
+   - `user/usys.pl`: 
+     entry("set_priority"); entry("set_burst");
+   - `kernel/syscall.h`: 
+     #define SYS_set_priority 22
+     #define SYS_set_burst 23
+   - `kernel/syscall.c`: Add externs and add to `syscalls` array.
+   - `kernel/sysproc.c`:
+     uint64 sys_set_priority(void) {
+       int pid, prio;
+       if(argint(0, &pid) < 0 || argint(1, &prio) < 0) return -1;
+       struct proc *p;
+       for(p = proc; p < &proc[NPROC]; p++) {
+         acquire(&p->lock);
+         if(p->pid == pid) { p->priority = prio; release(&p->lock); return 0; }
+         release(&p->lock);
+       } return -1;
+     }
+     uint64 sys_set_burst(void) {
+       int pid, bt;
+       if(argint(0, &pid) < 0 || argint(1, &bt) < 0) return -1;
+       struct proc *p;
+       for(p = proc; p < &proc[NPROC]; p++) {
+         acquire(&p->lock);
+         if(p->pid == pid) { p->burst_time = bt; release(&p->lock); return 0; }
+         release(&p->lock);
+       } return -1;
+     }
+
+---------------------------------------------------------
+QUESTION 1: FCFS SCHEDULER
+---------------------------------------------------------
+1. kernel/proc.c: Replace `for(;;)` in `scheduler()` with:
+  for(;;){
+    intr_on();
+    struct proc *min_p = 0;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        if(!min_p || p->ctime < min_p->ctime) {
+          if(min_p) release(&min_p->lock);
+          min_p = p;
+          continue;
+        }
+      }
+      release(&p->lock);
+    }
+    if(min_p) {
+      min_p->state = RUNNING;
+      c->proc = min_p;
+      swtch(&c->context, &min_p->context);
+      c->proc = 0;
+      release(&min_p->lock);
+    }
+  }
+
+2. kernel/trap.c: Disable Preemption.
+   In `usertrap()` and `kerneltrap()`, comment out:
+   // if(which_dev == 2) yield();
+
+3. user/fcfstest.c:
+#include "kernel/types.h"
+#include "user/user.h"
+int main() {
+    for(int i=0; i<3; i++) {
+        if(fork() == 0) {
+            for(volatile int j=0; j<100000000; j++); // CPU bound
+            printf("Process %d finished\n", getpid());
+            exit(0);
+        }
+        sleep(5); // Stagger arrival
+    }
+    for(int i=0; i<3; i++) wait(0);
+    exit(0);
+}
+
+---------------------------------------------------------
+QUESTION 2: PRIORITY WITH AGING
+---------------------------------------------------------
+1. kernel/proc.c: Replace `for(;;)` in `scheduler()` with:
+  for(;;){
+    intr_on();
+    struct proc *best_p = 0;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        if(!best_p || p->priority < best_p->priority) {
+          if(best_p) release(&best_p->lock);
+          best_p = p; continue;
+        }
+      }
+      release(&p->lock);
+    }
+    if(best_p) {
+      best_p->wait_ticks = 0; // Reset aging
+      best_p->state = RUNNING;
+      c->proc = best_p;
+      swtch(&c->context, &best_p->context);
+      c->proc = 0;
+      release(&best_p->lock);
+    }
+  }
+
+2. kernel/trap.c: In `usertrap()` and `kerneltrap()` under `if(which_dev == 2)`:
+    struct proc *p;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      if(p->state == RUNNABLE) {
+        p->wait_ticks++;
+        if(p->wait_ticks > 30) {
+          if(p->priority > 1) p->priority--; 
+          p->wait_ticks = 0;
+        }
+      }
+    }
+    if(myproc() && myproc()->state == RUNNING) yield();
+
+3. user/priotest.c:
+#include "kernel/types.h"
+#include "user/user.h"
+int main() {
+    for(int i=0; i<4; i++) {
+        int pid = fork();
+        if(pid == 0) {
+            set_priority(getpid(), 20 - (i*5)); // Priorities 20, 15, 10, 5
+            for(volatile int j=0; j<100000000; j++);
+            printf("Process %d (Prio %d) finished\n", getpid(), 20-(i*5));
+            exit(0);
+        }
+    }
+    for(int i=0; i<4; i++) wait(0);
+    exit(0);
+}
+
+---------------------------------------------------------
+QUESTION 3: SHORTEST JOB FIRST (SJF)
+---------------------------------------------------------
+1. kernel/proc.c: Replace `for(;;)` in `scheduler()` with:
+  for(;;){
+    intr_on();
+    struct proc *min_p = 0;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        if(!min_p) { min_p = p; continue; }
+        // Treat 0 or -1 as lowest priority (run last)
+        int bt_p = (p->burst_time > 0) ? p->burst_time : 999999;
+        int bt_min = (min_p->burst_time > 0) ? min_p->burst_time : 999999;
+        if(bt_p < bt_min) {
+          release(&min_p->lock);
+          min_p = p; continue;
+        }
+      }
+      release(&p->lock);
+    }
+    if(min_p) {
+      min_p->state = RUNNING;
+      c->proc = min_p;
+      swtch(&c->context, &min_p->context);
+      c->proc = 0;
+      release(&min_p->lock);
+    }
+  }
+
+2. kernel/trap.c: Disable preemption (comment out `yield()` on timer).
+
+3. user/sjftest.c:
+#include "kernel/types.h"
+#include "user/user.h"
+int main() {
+    for(int i=4; i>0; i--) { // Burst times: 40, 30, 20, 10
+        int pid = fork();
+        if(pid == 0) {
+            set_burst(getpid(), i * 10);
+            for(volatile int j=0; j<50000000*i; j++);
+            printf("Process %d (Burst %d) finished\n", getpid(), i*10);
+            exit(0);
+        }
+    }
+    for(int i=0; i<4; i++) wait(0);
+    exit(0);
+}

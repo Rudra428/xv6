@@ -1,0 +1,124 @@
+=========================================================
+ASSIGNMENT 4: ADVANCED SCHEDULERS (xv6-riscv)
+=========================================================
+(Ensure setup from Assignment 3 is present: ctime, burst_time).
+
+---------------------------------------------------------
+QUESTION 1: SHORTEST REMAINING TIME FIRST (SRTF)
+---------------------------------------------------------
+1. kernel/proc.h: Add `int remaining_time;` to `struct proc`.
+2. kernel/sysproc.c: Update `sys_set_burst` to also do `p->remaining_time = bt;`.
+3. kernel/proc.c (scheduler):
+  for(;;){
+    intr_on();
+    struct proc *min_p = 0;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE && p->remaining_time > 0) {
+        if(!min_p || p->remaining_time < min_p->remaining_time) {
+          if(min_p) release(&min_p->lock);
+          min_p = p; continue;
+        }
+      }
+      release(&p->lock);
+    }
+    if(min_p) {
+      min_p->state = RUNNING;
+      c->proc = min_p;
+      swtch(&c->context, &min_p->context);
+      c->proc = 0;
+      release(&min_p->lock);
+    }
+  }
+
+4. kernel/trap.c: Preempt if shorter job arrives.
+  if(which_dev == 2 && myproc() && myproc()->state == RUNNING) {
+    myproc()->remaining_time--;
+    int yield_req = 0;
+    struct proc *p;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      if(p->state == RUNNABLE && p->remaining_time > 0 && 
+         p->remaining_time < myproc()->remaining_time) {
+        yield_req = 1; break;
+      }
+    }
+    if(yield_req) yield();
+  }
+
+5. user/srtftest.c: (Fork 3 procs, stagger arrival via sleep, assign different burst times).
+
+---------------------------------------------------------
+QUESTION 2: HIGHEST RESPONSE RATIO NEXT (HRRN)
+---------------------------------------------------------
+1. kernel/proc.c (scheduler):
+  for(;;){
+    intr_on();
+    struct proc *best_p = 0;
+    int max_rr = -1;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE && p->burst_time > 0) {
+        int wait_time = ticks - p->ctime;
+        int rr = ((wait_time + p->burst_time) * 100) / p->burst_time;
+        if(rr > max_rr) {
+          if(best_p) release(&best_p->lock);
+          best_p = p; max_rr = rr; continue;
+        }
+      }
+      release(&p->lock);
+    }
+    if(best_p) {
+      best_p->state = RUNNING;
+      c->proc = best_p;
+      swtch(&c->context, &best_p->context);
+      c->proc = 0;
+      release(&best_p->lock);
+    }
+  }
+2. kernel/trap.c: Disable `yield()` on timer for non-preemptive behavior.
+3. user/hrrntest.c: Fork mix of short and long burst times, print completion.
+
+---------------------------------------------------------
+QUESTION 3: MULTILEVEL FEEDBACK QUEUE (MLFQ)
+---------------------------------------------------------
+1. kernel/proc.h: Add to `struct proc`:
+   int queue_level;
+   int ticks_used;
+2. kernel/proc.c (allocproc): Initialize `p->queue_level = 0; p->ticks_used = 0;`
+3. kernel/proc.c (scheduler):
+  for(;;){
+    intr_on();
+    struct proc *best_p = 0;
+    int best_lvl = 3;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        if(p->queue_level < best_lvl) {
+          if(best_p) release(&best_p->lock);
+          best_p = p; best_lvl = p->queue_level; continue;
+        }
+      }
+      release(&p->lock);
+    }
+    if(best_p) {
+      best_p->state = RUNNING;
+      c->proc = best_p;
+      swtch(&c->context, &best_p->context);
+      c->proc = 0;
+      release(&best_p->lock);
+    }
+  }
+
+4. kernel/trap.c (Time Slices & Demotion):
+  if(which_dev == 2 && myproc() && myproc()->state == RUNNING) {
+    struct proc *p = myproc();
+    p->ticks_used++;
+    int max_ticks = (p->queue_level == 0) ? 1 : (p->queue_level == 1 ? 2 : 4);
+    if(p->ticks_used >= max_ticks) {
+      p->ticks_used = 0;
+      if(p->queue_level < 2) p->queue_level++; // Demote
+      yield();
+    }
+  }
+
+5. user/mlfqtest.c: Create CPU bound (loops) and I/O bound (sleeps) processes. Print PIDs.

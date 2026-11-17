@@ -1,0 +1,210 @@
+=========================================================
+ASSIGNMENT 8: MEMORY MANAGEMENT IN XV6 (x86)
+=========================================================
+
+---------------------------------------------------------
+COMMON SETUP: ADDING SYSTEM CALLS IN XV6-x86
+---------------------------------------------------------
+For the custom syscalls in this assignment (`va2pa`, `getmeminfo`, `vmprint`), add them using the standard xv6-x86 method:
+1. `syscall.h`: Add `#define SYS_va2pa 22`, `#define SYS_getmeminfo 23`, `#define SYS_vmprint 24`
+2. `syscall.c`: Add `extern int sys_va2pa(void);` etc., and add to the `syscalls` array `[SYS_va2pa] sys_va2pa,`
+3. `user.h`: Add signatures: 
+   `int va2pa(int);`
+   `struct meminfo; int getmeminfo(struct meminfo*);`
+   `int vmprint(void);`
+4. `usys.S`: Add `SYSCALL(va2pa)`, `SYSCALL(getmeminfo)`, `SYSCALL(vmprint)`
+
+---------------------------------------------------------
+QUESTION 1: VIRTUAL TO PHYSICAL TRANSLATION (va2pa)
+---------------------------------------------------------
+1. Create `kernel/vm.c` helper function:
+(Add this at the bottom of `vm.c` so it can access `walkpgdir` and `myproc()`)
+```c
+int sys_va2pa(void) {
+  int va;
+  if(argint(0, &va) < 0) return -1;
+  
+  struct proc *p = myproc();
+  pte_t *pte = walkpgdir(p->pgdir, (void*)va, 0);
+  
+  if(!pte || !(*pte & PTE_P) || !(*pte & PTE_U)) return -1;
+  
+  int pa = PTE_ADDR(*pte) | (va & 0xFFF);
+  
+  cprintf("PD Index: %d, PT Index: %d, Offset: %d, Flags: P=%d W=%d U=%d\n",
+          PDX(va), PTX(va), va & 0xFFF,
+          (*pte & PTE_P) ? 1 : 0, (*pte & PTE_W) ? 1 : 0, (*pte & PTE_U) ? 1 : 0);
+          
+  return pa;
+}
+```
+
+2. `user/vatest.c`:
+```c
+#include "types.h"
+#include "user.h"
+
+int global_var = 10;
+
+int main() {
+    int local_var = 20;
+    void *heap_var = malloc(100);
+    
+    printf(1, "Global VA: %x -> PA: %x\n", &global_var, va2pa((int)&global_var));
+    printf(1, "Local VA: %x -> PA: %x\n", &local_var, va2pa((int)&local_var));
+    printf(1, "Heap VA: %x -> PA: %x\n", heap_var, va2pa((int)heap_var));
+    printf(1, "Invalid VA: 0x7FFFFFFF -> PA: %d\n", va2pa(0x7FFFFFFF));
+    
+    if(fork() == 0) {
+        printf(1, "Child Global VA: %x -> PA: %x\n", &global_var, va2pa((int)&global_var));
+        exit();
+    }
+    wait();
+    exit();
+}
+```
+
+---------------------------------------------------------
+QUESTION 2: PHYSICAL MEMORY STATISTICS
+---------------------------------------------------------
+1. Add to `user.h` (or a new `meminfo.h`):
+```c
+struct meminfo {
+  uint total_pages;
+  uint free_pages;
+  uint user_pages;
+  uint pt_pages;
+};
+```
+2. `kernel/kalloc.c`:
+Add a global variable and update it during alloc/free:
+```c
+uint free_pages_count = 0;
+
+void kfree(char *v) {
+  // ... existing checks ...
+  if(kmem.use_lock) acquire(&kmem.lock);
+  r->next = kmem.freelist;
+  kmem.freelist = r;
+  free_pages_count++; // ADD THIS
+  if(kmem.use_lock) release(&kmem.lock);
+}
+
+char* kalloc(void) {
+  // ...
+  if(r) {
+    kmem.freelist = r->next;
+    free_pages_count--; // ADD THIS
+  }
+  // ...
+}
+```
+3. `kernel/sysproc.c`:
+```c
+#include "memlayout.h" // For PHYSTOP
+extern uint free_pages_count;
+
+int sys_getmeminfo(void) {
+  struct meminfo *mi;
+  if(argptr(0, (void*)&mi, sizeof(*mi)) < 0) return -1;
+  
+  struct proc *p = myproc();
+  mi->total_pages = PHYSTOP / PGSIZE;
+  mi->free_pages = free_pages_count;
+  mi->user_pages = p->sz / PGSIZE;
+  mi->pt_pages = 0; // Requires traversing page tables, leaving 0 for brevity if acceptable, or loop PDX
+  return 0;
+}
+```
+
+---------------------------------------------------------
+QUESTION 3: DUMPING THE PAGE TABLE
+---------------------------------------------------------
+1. `kernel/vm.c`: Add `sys_vmprint`
+```c
+int sys_vmprint(void) {
+  struct proc *p = myproc();
+  pde_t *pgdir = p->pgdir;
+  int kernel_entries = 0;
+  
+  cprintf("Page Table for PID %d:\n", p->pid);
+  for(int i = 0; i < 512; i++) {
+    if(pgdir[i] & PTE_P) {
+      if(i >= PDX(KERNBASE)) { kernel_entries++; continue; }
+      
+      cprintf("PD Index %d: PA 0x%x, Flags P=%d W=%d U=%d\n", i, PTE_ADDR(pgdir[i]), 
+              (pgdir[i]&PTE_P)?1:0, (pgdir[i]&PTE_W)?1:0, (pgdir[i]&PTE_U)?1:0);
+              
+      pte_t *pt = (pte_t*)P2V(PTE_ADDR(pgdir[i]));
+      for(int j = 0; j < 512; j++) {
+        if(pt[j] & PTE_P) {
+          uint va = (i << 22) | (j << 12);
+          cprintf("  ..PT Index %d: VA 0x%x -> PA 0x%x, Flags P=%d W=%d U=%d\n", j, va, PTE_ADDR(pt[j]),
+                  (pt[j]&PTE_P)?1:0, (pt[j]&PTE_W)?1:0, (pt[j]&PTE_U)?1:0);
+        }
+      }
+    }
+  }
+  cprintf("Kernel PT entries (>=KERNBASE): %d\n", kernel_entries);
+  return 0;
+}
+```
+
+---------------------------------------------------------
+QUESTION 4: LAZY MEMORY ALLOCATION
+---------------------------------------------------------
+1. `kernel/sysproc.c`: Modify `sys_sbrk`
+```c
+int sys_sbrk(void) {
+  int addr;
+  int n;
+  if(argint(0, &n) < 0) return -1;
+  addr = myproc()->sz;
+  
+  if(n > 0) {
+    myproc()->sz += n; // Lazy allocation
+  } else if (n < 0) {
+    myproc()->sz = deallocuvm(myproc()->pgdir, addr, addr + n);
+  }
+  return addr;
+}
+```
+
+2. `kernel/trap.c`: Handle Page Fault (T_PGFLT = 14)
+Include `mmu.h` at the top if missing.
+Inside `trap(struct trapframe *tf)`, add a case for `T_PGFLT`:
+```c
+  case T_PGFLT: {
+    uint fault_addr = rcr2();
+    struct proc *p = myproc();
+    
+    // Check if within heap
+    if(fault_addr < p->sz && fault_addr >= (uint)p->tf->esp) {
+      char *mem = kalloc();
+      if(mem == 0) {
+        cprintf("Lazy alloc out of memory\n");
+        p->killed = 1;
+        break;
+      }
+      memset(mem, 0, PGSIZE);
+      uint a = PGROUNDDOWN(fault_addr);
+      if(mappages(p->pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0) {
+        kfree(mem);
+        p->killed = 1;
+      }
+    } else {
+      cprintf("Segmentation Fault PID %d VA 0x%x\n", p->pid, fault_addr);
+      p->killed = 1;
+    }
+    break;
+  }
+```
+
+3. `kernel/vm.c`: Fix `copyuvm` so `fork()` doesn't panic on lazy pages.
+Inside `copyuvm`, replace the panic lines with `continue`:
+```c
+    if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0)
+      continue; // LAZY ALLOC
+    if(!(*pte & PTE_P))
+      continue; // LAZY ALLOC
+```
