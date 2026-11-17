@@ -1,0 +1,122 @@
+XV6 QUICK COMMAND GUIDE
+
+This guide covers downloading, building, running, and cleaning the two
+common MIT xv6 versions on Ubuntu / WSL.
+
+1. BASIC UBUNTU / WSL COMMANDS
+
+Go to your home directory: cd ~
+
+List files and folders: ls
+
+Go one directory back: cd ..
+
+Go to your home directory from anywhere: cd ~
+
+Create a directory: mkdir folder_name
+
+Delete a directory: rm -r folder_name
+
+Rename a directory: mv old_name new_name
+
+Copy a Windows Desktop folder into Ubuntu: cp -r
+/mnt/c/Users/DELL/Desktop/asg ~/xv6/
+
+Windows C: drive is available in WSL at: /mnt/c/
+
+2. INSTALL COMMON TOOLS
+
+Update Ubuntu package information: sudo apt update
+
+Install Git, Make, and unzip: sudo apt install git make unzip -y
+
+3. DOWNLOAD XV6-RISCV (RISC-V VERSION)
+
+Option A: Clone with Git: cd ~ git clone
+https://github.com/mit-pdos/xv6-riscv.git cd xv6-riscv
+
+Option B: Download without Git: cd ~ wget
+https://github.com/mit-pdos/xv6-riscv/archive/refs/heads/riscv.zip unzip
+riscv.zip mv xv6-riscv-riscv xv6-riscv cd xv6-riscv
+
+Install the RISC-V compiler and QEMU dependencies: sudo apt update sudo
+apt install gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+qemu-system-misc gdb-multiarch make -y
+
+Build xv6: make
+
+Run xv6 in QEMU: make qemu
+
+Clean generated build files: make clean
+
+Rebuild from a clean state and run: make clean make qemu
+
+Exit QEMU: Press Ctrl+A, then release both keys and press X.
+
+If the terminal says that a RISC-V compiler or QEMU command is missing,
+check that the packages above are installed. The exact package
+requirements can vary with the Ubuntu release and the xv6 Makefile.
+
+4. DOWNLOAD XV6-PUBLIC (OLDER x86 VERSION)
+
+Clone with Git: cd ~ git clone
+https://github.com/mit-pdos/xv6-public.git cd xv6-public
+
+Download without Git: cd ~ wget
+https://github.com/mit-pdos/xv6-public/archive/refs/heads/master.zip
+unzip master.zip mv xv6-public-master xv6-public cd xv6-public
+
+Install typical x86 build and emulator dependencies: sudo apt update
+sudo apt install build-essential gcc-multilib qemu-system-x86 make -y
+
+Build: make
+
+Run: make qemu
+
+Clean: make clean
+
+Note: xv6-public is the older x86 version. Its Makefile and QEMU target
+may differ from xv6-riscv. If QEMU reports that qemu-system-i386 is
+missing, check whether your Ubuntu release provides that emulator or
+whether the Makefile needs to use the installed x86 QEMU binary.
+
+5. USEFUL MAKE COMMANDS
+
+    make          Build the kernel and user programs.
+    make qemu     Build if needed and run xv6 in QEMU.
+    make clean    Remove generated object files and build outputs.
+    make qemu-gdb Run QEMU with GDB debugging support, if provided by the Makefile.
+
+6. CHECK YOUR TOOLS
+
+Check Git: git –version
+
+Check Make: make –version
+
+Check the RISC-V compiler: riscv64-linux-gnu-gcc –version
+
+Check QEMU: qemu-system-riscv64 –version
+
+Check the x86 QEMU emulator: qemu-system-i386 –version
+
+7. GIT: SAVE AND PUSH YOUR CHANGES
+
+Inside your Git repository: git status git add . git commit -m “Update
+xv6 assignments” git push
+
+Check the current branch and remote: git branch –show-current git remote
+-v
+
+If the repository uses a branch named riscv: git push origin riscv
+
+If the repository uses a branch named main: git push origin main
+
+IMPORTANT
+
+-   Run make commands from the xv6 project directory (the directory
+    containing the Makefile).
+-   xv6-riscv and xv6-public are different codebases; use the compiler
+    and QEMU setup appropriate for the version you are building.
+-   A ZIP download is enough to get the source code, but it does not
+    create a Git repository. Install Git and clone the repository if you
+    need to commit and push changes.
